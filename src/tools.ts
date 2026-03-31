@@ -554,43 +554,39 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
 
   server.tool(
     "list_coupons",
-    "List coupons on the Thinkific site.",
+    "List coupons for a promotion. Thinkific coupons belong to promotions.",
     {
+      promotion_id: z.number().int().positive().describe("Promotion ID (use list_promotions to find IDs)"),
       page: z.number().int().positive().optional().describe("Page number. Default: 1"),
       limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
     },
-    async ({ page, limit }) =>
+    async ({ promotion_id, page, limit }) =>
       handleTool(async () => {
-        const data = await client.list<Coupon>("/coupons", page ?? 1, limit ?? 25);
+        const data = await client.list<Coupon>(`/promotions/${promotion_id}/coupons`, page ?? 1, limit ?? 25);
         return formatPaginated("Coupons", data, fmtCoupon);
       }),
   );
 
   server.tool(
     "create_coupon",
-    "Create a new coupon/discount code.",
+    "Create a new coupon/discount code under a promotion. Use list_promotions first to get the promotion_id.",
     {
+      promotion_id: z.number().int().positive().describe("Promotion ID to create the coupon under (use list_promotions to find IDs)"),
       code: z.string().min(1).describe("Coupon code string"),
-      discount_type: z.enum(["percentage", "fixed"]).describe("Discount type: percentage or fixed amount"),
-      discount_amount: z.number().positive().describe("Discount amount (percentage 0-100 or fixed dollar amount)"),
       note: z.string().optional().describe("Internal note about this coupon"),
       quantity: z.number().int().positive().optional().describe("Maximum uses (omit for unlimited)"),
-      product_ids: z.array(z.number().int().positive()).optional().describe("Product IDs this coupon applies to (omit for all products)"),
       expires_at: z.string().optional().describe("Expiration date (ISO 8601)"),
     },
     async (params) =>
       handleTool(async () => {
-        const payload: CreateCouponPayload = {
+        const payload: Record<string, unknown> = {
           code: params.code,
-          discount_type: params.discount_type,
-          discount_amount: params.discount_amount,
         };
         if (params.note) payload.note = params.note;
         if (params.quantity) payload.quantity = params.quantity;
-        if (params.product_ids) payload.product_ids = params.product_ids;
         if (params.expires_at) payload.expires_at = params.expires_at;
 
-        const coupon = await client.post<Coupon>("/coupons", payload);
+        const coupon = await client.post<Coupon>(`/promotions/${params.promotion_id}/coupons`, payload);
         return formatSingle("Coupon Created", coupon, fmtCoupon);
       }),
   );
