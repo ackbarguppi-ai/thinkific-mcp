@@ -550,6 +550,37 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
       }),
   );
 
+  // ── Promotions (create) ──────────────────────────────────────────
+
+  server.tool(
+    "create_promotion",
+    "Create a new promotion (discount). Promotions hold coupon codes. Create a promotion first, then create coupons under it.",
+    {
+      name: z.string().min(1).describe("Promotion name (e.g. 'Spring Sale', '25% Off Launch')"),
+      discount_type: z.enum(["percentage", "fixed"]).describe("Discount type: percentage or fixed dollar amount"),
+      amount: z.number().positive().describe("Discount amount (e.g. 25 for 25% off, or 10 for $10 off)"),
+      product_ids: z.array(z.number().int().positive()).optional().describe("Product IDs this promotion applies to (omit for all products)"),
+      description: z.string().optional().describe("Promotion description"),
+      starts_at: z.string().optional().describe("Start date (ISO 8601)"),
+      expires_at: z.string().optional().describe("Expiration date (ISO 8601)"),
+    },
+    async (params) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {
+          name: params.name,
+          discount_type: params.discount_type,
+          amount: params.amount,
+        };
+        if (params.product_ids) payload.product_ids = params.product_ids;
+        if (params.description) payload.description = params.description;
+        if (params.starts_at) payload.starts_at = params.starts_at;
+        if (params.expires_at) payload.expires_at = params.expires_at;
+
+        const promo = await client.post<Record<string, unknown>>("/promotions", payload);
+        return `Promotion Created\n\n🎉 [${promo.id}] ${promo.name}\n   Type: ${promo.discount_type}\n   Amount: ${promo.amount}\n   ID: ${promo.id} (use this ID to create coupon codes)`;
+      }),
+  );
+
   // ── Coupons ────────────────────────────────────────────────────────
 
   server.tool(
