@@ -15,6 +15,9 @@ import { resolveAuth, ThinkificClient } from "./client.js";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 import { registerGraphQLTools } from "./graphql-tools.js";
+import { metrics } from "./metrics.js";
+
+const VERSION = "1.1.0";
 
 /**
  * Bootstrap and start the MCP server.
@@ -25,14 +28,22 @@ import { registerGraphQLTools } from "./graphql-tools.js";
  * 4. Connect via stdio transport.
  */
 async function main(): Promise<void> {
+  const startTime = performance.now();
+  
   // Resolve auth config — will throw with a helpful message if not configured
   const auth = resolveAuth();
 
-  const client = new ThinkificClient(auth);
+  // Create client with optimized settings
+  const client = new ThinkificClient(auth, {
+    enableCache: true,
+    cacheTTL: 10000, // 10 second default cache
+    maxRetries: 3,
+    requestTimeout: 30000,
+  });
 
   const server = new McpServer({
     name: "thinkific-mcp-server",
-    version: "1.0.0",
+    version: VERSION,
   });
 
   // Register all tools and resources
@@ -45,12 +56,27 @@ async function main(): Promise<void> {
   await server.connect(transport);
 
   // Log to stderr so it doesn't interfere with MCP protocol on stdout
+  const startupTime = performance.now() - startTime;
   console.error(
-    `Thinkific MCP server started (auth: ${auth.mode}, transport: stdio)`,
+    `Thinkific MCP server v${VERSION} started (${startupTime.toFixed(1)}ms)`,
   );
+  console.error(`Auth: ${auth.mode}, Cache: enabled, Transport: stdio`);
 }
 
 main().catch((err) => {
   console.error("Fatal error starting Thinkific MCP server:", err);
   process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.error('\nShutting down...');
+  console.error(metrics.formatReport());
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.error('\nShutting down...');
+  console.error(metrics.formatReport());
+  process.exit(0);
 });

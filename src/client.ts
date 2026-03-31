@@ -1,11 +1,19 @@
 /**
- * Thinkific REST API client.
- *
- * Handles authentication (API Key or OAuth), pagination helpers,
- * rate-limit back-off, and structured error responses.
+ * Optimized HTTP client with connection pooling, caching, compression,
+ * request coalescing, and performance instrumentation.
  *
  * @module client
  */
+
+import https from 'https';
+import { URL } from 'url';
+import zlib from 'zlib';
+import { promisify } from 'util';
+import { metrics } from './metrics.js';
+
+const gunzip = promisify(zlib.gunzip);
+const deflate = promisify(zlib.deflate);
+const brotliDecompress = promisify(zlib.brotliDecompress);
 
 import {
   ThinkificAuthConfig,
@@ -16,25 +24,128 @@ import {
 const BASE_URL = "https://api.thinkific.com/api/public/v1";
 const GQL_URL = "https://api.thinkific.com/stable/graphql";
 
-/** Maximum automatic retries on 429 / 5xx responses. */
-const MAX_RETRIES = 3;
-
 /** Default back-off when no Retry-After header is provided (ms). */
 const DEFAULT_BACKOFF_MS = 2_000;
+
+/** Connection pool settings for optimal performance */
+const HTTP_AGENT_OPTIONS = {
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000,
+  scheduling: 'lifo' as const,
+};
+
+/** Global connection agents for reuse across all instances */
+const httpsAgent = new https.Agent(HTTP_AGENT_OPTIONS);
+
+// ---------------------------------------------------------------------------
+// Cache implementation
+// ---------------------------------------------------------------------------
+
+interface CacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
+class SimpleCache {
+  private cache = new Map<string, CacheEntry<unknown>>();
+  private readonly defaultTTL: number;
+
+  constructor(defaultTTLMs: number = 5000) {
+    this.defaultTTL = defaultTTLMs;
+  }
+
+  get<T>(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry) {
+      metrics.recordCacheMiss();
+      return undefined;
+    }
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      metrics.recordCacheMiss();
+      return undefined;
+    }
+    metrics.recordCacheHit();
+    return entry.data as T;
+  }
+
+  set<T>(key: string, data: T, ttlMs?: number): void {
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + (ttlMs ?? this.defaultTTL),
+    });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
+/** Global cache instance */
+const globalCache = new SimpleCache(5000);
+setInterval(() => globalCache.cleanup(), 60000);
+
+// ---------------------------------------------------------------------------
+// Request coalescing - deduplicate in-flight identical requests
+// ---------------------------------------------------------------------------
+
+class RequestCoalescer<T, R> {
+  private inFlight = new Map<string, Promise<R>>();
+
+  constructor(private keyFn: (params: T) => string) {}
+
+  async execute(params: T, fn: (params: T) => Promise<R>): Promise<R> {
+    const key = this.keyFn(params);
+
+    const existing = this.inFlight.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const promise = fn(params).finally(() => {
+      this.inFlight.delete(key);
+    });
+
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  clear(): void {
+    this.inFlight.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client options interface
+// ---------------------------------------------------------------------------
+
+export interface ClientOptions {
+  enableCache?: boolean;
+  cacheTTL?: number;
+  maxRetries?: number;
+  requestTimeout?: number;
+}
 
 // ---------------------------------------------------------------------------
 // Auth resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve auth configuration from environment variables.
- *
- * Precedence:
- *   1. `THINKIFIC_OAUTH_TOKEN`  → OAuth Bearer mode
- *   2. `THINKIFIC_API_KEY` + `THINKIFIC_SUBDOMAIN` → API Key mode
- *
- * @throws if neither auth method is fully configured.
- */
 export function resolveAuth(): ThinkificAuthConfig {
   const oauthToken = process.env.THINKIFIC_OAUTH_TOKEN;
   if (oauthToken) {
@@ -65,8 +176,6 @@ function gqlAuthHeaders(auth: ThinkificAuthConfig): Record<string, string> {
   if (auth.mode === "oauth") {
     bearer = auth.oauthToken!;
   } else {
-    // API key mode: Thinkific stable GraphQL requires a Bearer token.
-    // Fall back gracefully — the caller should use OAuth for GraphQL.
     bearer = auth.apiKey ?? "";
   }
   return {
@@ -74,35 +183,33 @@ function gqlAuthHeaders(auth: ThinkificAuthConfig): Record<string, string> {
     "Content-Type": "application/json",
     "User-Agent": "ThinkificMCP/1.0 (Node.js)",
     Accept: "application/json",
+    "Accept-Encoding": "gzip, deflate, br",
+    Connection: "keep-alive",
   };
 }
 
 function authHeaders(auth: ThinkificAuthConfig): Record<string, string> {
-  if (auth.mode === "oauth") {
-    return {
-      Authorization: `Bearer ${auth.oauthToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": "ThinkificMCP/1.0 (Node.js)",
-      Accept: "application/json",
-    };
-  }
-  return {
-    "X-Auth-API-Key": auth.apiKey!,
-    "X-Auth-Subdomain": auth.subdomain!,
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "User-Agent": "ThinkificMCP/1.0 (Node.js)",
     Accept: "application/json",
+    "Accept-Encoding": "gzip, deflate, br",
+    Connection: "keep-alive",
   };
+
+  if (auth.mode === "oauth") {
+    headers.Authorization = `Bearer ${auth.oauthToken}`;
+  } else {
+    headers["X-Auth-API-Key"] = auth.apiKey!;
+    headers["X-Auth-Subdomain"] = auth.subdomain!;
+  }
+  return headers;
 }
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/**
- * Parse the `Retry-After` header.
- * The header value may be seconds (integer) or an HTTP-date string.
- */
 function parseRetryAfter(header: string | null): number {
   if (!header) return DEFAULT_BACKOFF_MS;
   const asNum = Number(header);
@@ -112,36 +219,78 @@ function parseRetryAfter(header: string | null): number {
   return DEFAULT_BACKOFF_MS;
 }
 
+/** Generate cache key from request parameters */
+function generateCacheKey(method: string, path: string, params?: Record<string, unknown>): string {
+  const paramsStr = params ? JSON.stringify(params) : '';
+  return `${method}:${path}:${paramsStr}`;
+}
+
 // ---------------------------------------------------------------------------
-// ThinkificClient
+// Optimized ThinkificClient
 // ---------------------------------------------------------------------------
 
-/**
- * Low-level Thinkific API client with retry/backoff and pagination.
- */
 export class ThinkificClient {
   private auth: ThinkificAuthConfig;
+  private cache: SimpleCache;
+  private enableCache: boolean;
+  private maxRetries: number;
+  private requestTimeout: number;
+  private requestCoalescer: RequestCoalescer<
+    { method: string; path: string; params?: Record<string, unknown> },
+    unknown
+  >;
 
-  constructor(auth: ThinkificAuthConfig) {
+  constructor(auth: ThinkificAuthConfig, options?: ClientOptions) {
     this.auth = auth;
+    this.enableCache = options?.enableCache ?? true;
+    this.maxRetries = options?.maxRetries ?? 3;
+    this.requestTimeout = options?.requestTimeout ?? 30000;
+    this.cache = options?.cacheTTL ? new SimpleCache(options.cacheTTL) : globalCache;
+    this.requestCoalescer = new RequestCoalescer((req) => 
+      generateCacheKey(req.method, req.path, req.params)
+    );
   }
 
-  // ── Core request method ──────────────────────────────────────────────
-
   /**
-   * Execute an authenticated request against the Thinkific API.
-   *
-   * Automatically retries on 429 (rate limit) and 5xx errors up to
-   * {@link MAX_RETRIES} times with exponential back-off.
+   * Execute an authenticated request with connection pooling, compression, caching,
+   * and request coalescing.
    */
   async request<T>(
     method: string,
     path: string,
     body?: unknown,
     params?: Record<string, string | number | boolean | undefined>,
+    options?: { skipCache?: boolean; cacheTTL?: number }
+  ): Promise<T> {
+    // Check cache for GET requests
+    const cacheKey = generateCacheKey(method, path, params);
+    if (this.enableCache && method === 'GET' && !options?.skipCache) {
+      const cached = this.cache.get<T>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
+    // Use request coalescing for GET requests to deduplicate in-flight requests
+    if (method === 'GET') {
+      return this.requestCoalescer.execute(
+        { method, path, params },
+        async () => this.executeRequest<T>(method, path, body, params, options, cacheKey)
+      ) as Promise<T>;
+    }
+
+    return this.executeRequest<T>(method, path, body, params, options, cacheKey);
+  }
+
+  private async executeRequest<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    params?: Record<string, string | number | boolean | undefined>,
+    options?: { skipCache?: boolean; cacheTTL?: number },
+    cacheKey?: string
   ): Promise<T> {
     const url = new URL(`${BASE_URL}${path}`);
-
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         if (v !== undefined && v !== null) {
@@ -153,174 +302,243 @@ export class ThinkificClient {
     const headers = authHeaders(this.auth);
     let lastError: Error | undefined;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const startTime = performance.now();
+      let error = false;
+      let cached = false;
+
       try {
-        const resp = await fetch(url.toString(), {
-          method,
-          headers,
-          body: body ? JSON.stringify(body) : undefined,
-        });
-
-        // Rate-limited — back off and retry
-        if (resp.status === 429) {
-          const wait = parseRetryAfter(resp.headers.get("Retry-After"));
-          if (attempt < MAX_RETRIES) {
-            await sleep(wait);
-            continue;
-          }
+        const response = await this.makeRequest<T>(url, method, headers, body);
+        
+        // Cache successful GET responses
+        if (this.enableCache && method === 'GET' && !options?.skipCache && cacheKey) {
+          this.cache.set(cacheKey, response, options?.cacheTTL);
         }
-
-        // Server error — exponential backoff retry
-        if (resp.status >= 500 && attempt < MAX_RETRIES) {
-          await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
-          continue;
-        }
-
-        // Not OK and not retryable
-        if (!resp.ok) {
-          let errBody: unknown;
-          try {
-            errBody = await resp.json();
-          } catch {
-            errBody = await resp.text().catch(() => null);
-          }
-          throw new ThinkificApiError(
-            `Thinkific API ${method} ${path} returned ${resp.status}: ${JSON.stringify(errBody)}`,
-            resp.status,
-            errBody,
-            path,
-          );
-        }
-
-        // 204 No Content
-        if (resp.status === 204) {
-          return undefined as unknown as T;
-        }
-
-        return (await resp.json()) as T;
+        
+        metrics.recordApiCall(method, path, performance.now() - startTime, false, cached);
+        return response;
       } catch (err) {
+        error = true;
+        metrics.recordApiCall(method, path, performance.now() - startTime, true, false);
+
         if (err instanceof ThinkificApiError) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_RETRIES) {
+        if (attempt < this.maxRetries) {
           await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
           continue;
         }
       }
     }
 
-    throw lastError ?? new Error(`Request to ${path} failed after ${MAX_RETRIES} retries`);
+    throw lastError ?? new Error(`Request to ${path} failed after ${this.maxRetries} retries`);
   }
 
-  // ── Convenience methods ──────────────────────────────────────────────
+  /** Make a single HTTP request with connection pooling and compression */
+  private makeRequest<T>(
+    url: URL,
+    method: string,
+    headers: Record<string, string>,
+    body?: unknown
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const reqOptions: https.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method,
+        headers,
+        agent: httpsAgent,
+        timeout: this.requestTimeout,
+      };
 
-  /** HTTP GET with optional query params. */
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>("GET", path, undefined, params);
+      const req = https.request(reqOptions, async (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        
+        res.on('end', async () => {
+          try {
+            const buffer = Buffer.concat(chunks);
+            const encoding = res.headers['content-encoding'];
+            const decompressed = await this.decompressBody(buffer, encoding || null);
+            
+            const status = res.statusCode || 0;
+            
+            if (status === 429) {
+              const wait = parseRetryAfter(res.headers['retry-after'] as string);
+              await sleep(wait);
+              reject(new Error('Rate limited'));
+              return;
+            }
+            
+            if (status >= 500) {
+              reject(new Error(`Server error: ${status}`));
+              return;
+            }
+            
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              let errBody: unknown;
+              try {
+                errBody = JSON.parse(decompressed.toString());
+              } catch {
+                errBody = decompressed.toString();
+              }
+              reject(new ThinkificApiError(
+                `Thinkific API ${method} ${url.pathname} returned ${status}: ${JSON.stringify(errBody)}`,
+                status,
+                errBody,
+                url.pathname,
+              ));
+              return;
+            }
+            
+            if (status === 204) {
+              resolve(undefined as unknown as T);
+              return;
+            }
+            
+            const data = JSON.parse(decompressed.toString()) as T;
+            resolve(data);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+
+      if (body) {
+        req.write(JSON.stringify(body));
+      }
+      req.end();
+    });
   }
 
-  /** HTTP POST with JSON body. */
+  private async decompressBody(body: Buffer, encoding: string | null): Promise<Buffer> {
+    if (!encoding) return body;
+    
+    switch (encoding.toLowerCase()) {
+      case 'gzip':
+        return gunzip(body);
+      case 'deflate':
+        return deflate(body);
+      case 'br':
+        return brotliDecompress(body);
+      default:
+        return body;
+    }
+  }
+
+  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>, options?: { skipCache?: boolean; cacheTTL?: number }): Promise<T> {
+    return this.request<T>("GET", path, undefined, params, options);
+  }
+
   async post<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>("POST", path, body);
   }
 
-  /** HTTP PUT with JSON body. */
   async put<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>("PUT", path, body);
   }
 
-  /** HTTP DELETE (no body). */
   async delete<T>(path: string): Promise<T> {
     return this.request<T>("DELETE", path);
   }
 
-  // ── GraphQL request method ───────────────────────────────────────────
-
   /**
-   * Execute a named GraphQL operation against the Thinkific stable GraphQL API.
-   *
-   * All operations MUST be named (Thinkific rejects unnamed operations).
-   * Handles rate-limit back-off same as REST.
-   *
-   * @param operationName - Named operation (required by Thinkific)
-   * @param query         - Full query/mutation string (must include `operationName`)
-   * @param variables     - Optional variables
+   * Execute a GraphQL operation with connection pooling and compression.
    */
   async gql<T>(
     operationName: string,
     query: string,
-    variables?: Record<string, unknown>,
+    variables?: Record<string, unknown>
   ): Promise<T> {
+    const cacheKey = `gql:${operationName}:${JSON.stringify(variables)}`;
+    if (this.enableCache) {
+      const cached = this.cache.get<T>(cacheKey);
+      if (cached !== undefined) return cached;
+    }
+
     const headers = gqlAuthHeaders(this.auth);
     const body = JSON.stringify({ operationName, query, variables: variables ?? {} });
     let lastError: Error | undefined;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const startTime = performance.now();
+
       try {
-        const resp = await fetch(GQL_URL, {
-          method: "POST",
-          headers,
-          body,
+        const url = new URL(GQL_URL);
+        const result = await new Promise<T>((resolve, reject) => {
+          const reqOptions: https.RequestOptions = {
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname,
+            method: 'POST',
+            headers,
+            agent: httpsAgent,
+            timeout: this.requestTimeout,
+          };
+
+          const req = https.request(reqOptions, async (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            
+            res.on('end', async () => {
+              try {
+                const buffer = Buffer.concat(chunks);
+                const encoding = res.headers['content-encoding'];
+                const decompressed = await this.decompressBody(buffer, encoding || null);
+                
+                const json = JSON.parse(decompressed.toString()) as { data?: T; errors?: Array<{ message: string }> };
+
+                if (json.errors?.length) {
+                  const msgs = json.errors.map((e) => e.message).join("; ");
+                  reject(new ThinkificApiError(
+                    `GraphQL error in ${operationName}: ${msgs}`,
+                    200,
+                    json.errors,
+                    "graphql",
+                  ));
+                  return;
+                }
+
+                resolve(json.data as T);
+              } catch (err) {
+                reject(err);
+              }
+            });
+          });
+
+          req.on('error', reject);
+          req.write(body);
+          req.end();
         });
 
-        if (resp.status === 429) {
-          const wait = parseRetryAfter(resp.headers.get("Retry-After"));
-          if (attempt < MAX_RETRIES) {
-            await sleep(wait);
-            continue;
-          }
+        metrics.recordApiCall('GQL', operationName, performance.now() - startTime, false, false);
+
+        if (this.enableCache) {
+          this.cache.set(cacheKey, result);
         }
-
-        if (resp.status >= 500 && attempt < MAX_RETRIES) {
-          await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
-          continue;
-        }
-
-        if (!resp.ok) {
-          let errBody: unknown;
-          try { errBody = await resp.json(); } catch { errBody = await resp.text().catch(() => null); }
-          throw new ThinkificApiError(
-            `Thinkific GraphQL ${operationName} returned ${resp.status}: ${JSON.stringify(errBody)}`,
-            resp.status,
-            errBody,
-            "graphql",
-          );
-        }
-
-        const json = (await resp.json()) as { data?: T; errors?: Array<{ message: string }> };
-
-        if (json.errors?.length) {
-          const msgs = json.errors.map((e) => e.message).join("; ");
-          throw new ThinkificApiError(
-            `GraphQL error in ${operationName}: ${msgs}`,
-            200,
-            json.errors,
-            "graphql",
-          );
-        }
-
-        return json.data as T;
+        return result;
       } catch (err) {
+        metrics.recordApiCall('GQL', operationName, performance.now() - startTime, true, false);
         if (err instanceof ThinkificApiError) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_RETRIES) {
+        if (attempt < this.maxRetries) {
           await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
           continue;
         }
       }
     }
 
-    throw lastError ?? new Error(`GraphQL ${operationName} failed after ${MAX_RETRIES} retries`);
+    throw lastError ?? new Error(`GraphQL ${operationName} failed after ${this.maxRetries} retries`);
   }
-
-  // ── Paginated list helper ────────────────────────────────────────────
 
   /**
    * Fetch a single page from a list endpoint.
-   *
-   * @param path   - API path (e.g. `/courses`)
-   * @param page   - 1-based page number
-   * @param limit  - items per page (API default is 25, max 250)
-   * @param extra  - additional query parameters
    */
   async list<T>(
     path: string,
@@ -333,5 +551,56 @@ export class ThinkificClient {
       limit,
       ...extra,
     });
+  }
+
+  /**
+   * Fetch all pages with optimized concurrent requests.
+   * Uses connection pooling and request coalescing for maximum efficiency.
+   */
+  async listAll<T>(
+    path: string,
+    limit: number = 250,
+    extra?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T[]> {
+    // First request to get total count - may be served from cache
+    const firstPage = await this.list<T>(path, 1, limit, extra);
+    const totalPages = firstPage.meta.pagination.total_pages;
+    
+    if (totalPages <= 1) {
+      return firstPage.items;
+    }
+    
+    // Fetch remaining pages in parallel with controlled concurrency
+    const allItems = [...firstPage.items];
+    const batchSize = 5; // Process 5 pages at a time to avoid overwhelming the API
+    
+    for (let batchStart = 2; batchStart <= totalPages; batchStart += batchSize) {
+      const batchEnd = Math.min(batchStart + batchSize - 1, totalPages);
+      const promises: Promise<PaginatedResponse<T>>[] = [];
+      
+      for (let page = batchStart; page <= batchEnd; page++) {
+        promises.push(this.list<T>(path, page, limit, extra));
+      }
+      
+      const results = await Promise.all(promises);
+      for (const result of results) {
+        allItems.push(...result.items);
+      }
+    }
+    
+    return allItems;
+  }
+
+  /** Get cache statistics */
+  getCacheStats(): { size: number; hitRate: number } {
+    return {
+      size: this.cache.size,
+      hitRate: metrics.getSnapshot().cache.hitRate,
+    };
+  }
+
+  /** Clear the cache */
+  clearCache(): void {
+    this.cache.clear();
   }
 }

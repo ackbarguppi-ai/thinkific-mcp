@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ThinkificClient } from "./client.js";
+import { metrics } from "./metrics.js";
 import type {
   Course,
   Chapter,
@@ -1676,6 +1677,25 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
           `Total Enrollments: ${enrollments.meta.pagination.total_items}`,
           `Total Products:    ${products.meta.pagination.total_items}`,
         ].join("\n");
+      }),
+  );
+
+
+  // ── Performance Metrics ─────────────────────────────────────────────
+
+  server.tool(
+    "get_performance_metrics",
+    "Get performance metrics and statistics for API calls, cache hit rates, and tool execution times. Use this to monitor and optimize MCP server performance.",
+    {
+      reset: z.boolean().optional().describe("Reset metrics after retrieving. Default: false"),
+    },
+    async ({ reset }) =>
+      handleTool(async () => {
+        const report = metrics.formatReport();
+        if (reset) {
+          metrics.reset();
+        }
+        return report;
       }),
   );
 }
