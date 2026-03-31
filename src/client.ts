@@ -64,12 +64,16 @@ function authHeaders(auth: ThinkificAuthConfig): Record<string, string> {
     return {
       Authorization: `Bearer ${auth.oauthToken}`,
       "Content-Type": "application/json",
+      "User-Agent": "ThinkificMCP/1.0 (Node.js)",
+      Accept: "application/json",
     };
   }
   return {
     "X-Auth-API-Key": auth.apiKey!,
     "X-Auth-Subdomain": auth.subdomain!,
     "Content-Type": "application/json",
+    "User-Agent": "ThinkificMCP/1.0 (Node.js)",
+    Accept: "application/json",
   };
 }
 
