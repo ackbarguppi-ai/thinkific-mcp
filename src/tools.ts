@@ -569,24 +569,23 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
 
   server.tool(
     "create_coupon",
-    "Create a new coupon/discount code under a promotion. Use list_promotions first to get the promotion_id.",
+    "Create a new coupon/discount code. Requires a promotion_id — use list_promotions first to get one.",
     {
-      promotion_id: z.number().int().positive().describe("Promotion ID to create the coupon under (use list_promotions to find IDs)"),
+      promotion_id: z.number().int().positive().describe("Promotion ID this coupon belongs to (use list_promotions to find IDs)"),
       code: z.string().min(1).describe("Coupon code string"),
       note: z.string().optional().describe("Internal note about this coupon"),
       quantity: z.number().int().positive().optional().describe("Maximum uses (omit for unlimited)"),
-      expires_at: z.string().optional().describe("Expiration date (ISO 8601)"),
     },
     async (params) =>
       handleTool(async () => {
         const payload: Record<string, unknown> = {
           code: params.code,
+          promotion_id: params.promotion_id,
         };
         if (params.note) payload.note = params.note;
         if (params.quantity) payload.quantity = params.quantity;
-        if (params.expires_at) payload.expires_at = params.expires_at;
 
-        const coupon = await client.post<Coupon>(`/promotions/${params.promotion_id}/coupons`, payload);
+        const coupon = await client.post<Coupon>("/coupons", payload);
         return formatSingle("Coupon Created", coupon, fmtCoupon);
       }),
   );
