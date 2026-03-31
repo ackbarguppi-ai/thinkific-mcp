@@ -14,6 +14,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { resolveAuth, ThinkificClient } from "./client.js";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
+import { registerGraphQLTools } from "./graphql-tools.js";
 
 /**
  * Bootstrap and start the MCP server.
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
 
   // Register all tools and resources
   registerTools(server, client);
+  registerGraphQLTools(server, client);
   registerResources(server, client);
 
   // Connect via stdio transport

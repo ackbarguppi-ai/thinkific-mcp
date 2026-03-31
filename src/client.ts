@@ -14,6 +14,7 @@ import {
 } from "./types.js";
 
 const BASE_URL = "https://api.thinkific.com/api/public/v1";
+const GQL_URL = "https://api.thinkific.com/stable/graphql";
 
 /** Maximum automatic retries on 429 / 5xx responses. */
 const MAX_RETRIES = 3;
@@ -58,6 +59,23 @@ export function resolveAuth(): ThinkificAuthConfig {
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
+
+function gqlAuthHeaders(auth: ThinkificAuthConfig): Record<string, string> {
+  let bearer: string;
+  if (auth.mode === "oauth") {
+    bearer = auth.oauthToken!;
+  } else {
+    // API key mode: Thinkific stable GraphQL requires a Bearer token.
+    // Fall back gracefully — the caller should use OAuth for GraphQL.
+    bearer = auth.apiKey ?? "";
+  }
+  return {
+    Authorization: `Bearer ${bearer}`,
+    "Content-Type": "application/json",
+    "User-Agent": "ThinkificMCP/1.0 (Node.js)",
+    Accept: "application/json",
+  };
+}
 
 function authHeaders(auth: ThinkificAuthConfig): Record<string, string> {
   if (auth.mode === "oauth") {
@@ -213,6 +231,85 @@ export class ThinkificClient {
   /** HTTP DELETE (no body). */
   async delete<T>(path: string): Promise<T> {
     return this.request<T>("DELETE", path);
+  }
+
+  // ── GraphQL request method ───────────────────────────────────────────
+
+  /**
+   * Execute a named GraphQL operation against the Thinkific stable GraphQL API.
+   *
+   * All operations MUST be named (Thinkific rejects unnamed operations).
+   * Handles rate-limit back-off same as REST.
+   *
+   * @param operationName - Named operation (required by Thinkific)
+   * @param query         - Full query/mutation string (must include `operationName`)
+   * @param variables     - Optional variables
+   */
+  async gql<T>(
+    operationName: string,
+    query: string,
+    variables?: Record<string, unknown>,
+  ): Promise<T> {
+    const headers = gqlAuthHeaders(this.auth);
+    const body = JSON.stringify({ operationName, query, variables: variables ?? {} });
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const resp = await fetch(GQL_URL, {
+          method: "POST",
+          headers,
+          body,
+        });
+
+        if (resp.status === 429) {
+          const wait = parseRetryAfter(resp.headers.get("Retry-After"));
+          if (attempt < MAX_RETRIES) {
+            await sleep(wait);
+            continue;
+          }
+        }
+
+        if (resp.status >= 500 && attempt < MAX_RETRIES) {
+          await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
+          continue;
+        }
+
+        if (!resp.ok) {
+          let errBody: unknown;
+          try { errBody = await resp.json(); } catch { errBody = await resp.text().catch(() => null); }
+          throw new ThinkificApiError(
+            `Thinkific GraphQL ${operationName} returned ${resp.status}: ${JSON.stringify(errBody)}`,
+            resp.status,
+            errBody,
+            "graphql",
+          );
+        }
+
+        const json = (await resp.json()) as { data?: T; errors?: Array<{ message: string }> };
+
+        if (json.errors?.length) {
+          const msgs = json.errors.map((e) => e.message).join("; ");
+          throw new ThinkificApiError(
+            `GraphQL error in ${operationName}: ${msgs}`,
+            200,
+            json.errors,
+            "graphql",
+          );
+        }
+
+        return json.data as T;
+      } catch (err) {
+        if (err instanceof ThinkificApiError) throw err;
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < MAX_RETRIES) {
+          await sleep(DEFAULT_BACKOFF_MS * Math.pow(2, attempt));
+          continue;
+        }
+      }
+    }
+
+    throw lastError ?? new Error(`GraphQL ${operationName} failed after ${MAX_RETRIES} retries`);
   }
 
   // ── Paginated list helper ────────────────────────────────────────────
