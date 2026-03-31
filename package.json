@@ -1,0 +1,47 @@
+{
+  "name": "thinkific-mcp-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for the Thinkific API — manage courses, users, enrollments, orders, and more via AI assistants.",
+  "author": "Greg Smith",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "thinkific-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "test": "node --experimental-vm-modules dist/test.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "thinkific",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "lms",
+    "courses",
+    "education"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ackbarguppi-ai/thinkific-mcp"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
