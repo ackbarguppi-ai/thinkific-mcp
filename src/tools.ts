@@ -30,6 +30,13 @@ import type {
   CreateUserPayload,
   CreateEnrollmentPayload,
   CreateCouponPayload,
+  CustomProfileFieldDefinition,
+  ExternalOrder,
+  GroupUser,
+  GroupAnalyst,
+  ProductPublishRequest,
+  SiteScript,
+  BundleEnrollment,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -240,6 +247,79 @@ function fmtCategory(c: Category): string {
     `   Slug: ${c.slug}`,
     c.description ? `   Description: ${c.description.slice(0, 150)}` : null,
     `   Created: ${c.created_at}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtCustomProfileFieldDef(f: CustomProfileFieldDefinition): string {
+  return [
+    `📋 [${f.id}] ${f.label}`,
+    `   Type: ${f.field_type}`,
+    `   Required: ${f.required}`,
+    `   Position: ${f.position}`,
+    f.choices?.length ? `   Choices: ${f.choices.join(", ")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtExternalOrder(o: ExternalOrder): string {
+  return [
+    `🧾 [${o.id}] ${o.product_name}`,
+    `   User: ${o.user_email} (ID: ${o.user_id})`,
+    `   Amount: $${(o.amount_cents / 100).toFixed(2)}`,
+    `   Created: ${o.created_at}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtProductPublishRequest(r: ProductPublishRequest): string {
+  return [
+    `📢 [${r.id}] ${r.product_name}`,
+    `   Product ID: ${r.product_id}`,
+    `   Status: ${r.status}`,
+    `   Requester ID: ${r.requester_id}`,
+    r.reviewer_id ? `   Reviewer ID: ${r.reviewer_id}` : null,
+    `   Created: ${r.created_at}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtSiteScript(s: SiteScript): string {
+  return [
+    `📜 [${s.id}] ${s.name}`,
+    `   Location: ${s.location}`,
+    `   Enabled: ${s.enabled}`,
+    `   Content preview: ${s.content.slice(0, 100)}${s.content.length > 100 ? "…" : ""}`,
+    `   Created: ${s.created_at}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtBundleEnrollment(e: BundleEnrollment): string {
+  return [
+    `🎓 [${e.id}] Bundle Enrollment`,
+    `   User: ${e.user_email} (ID: ${e.user_id})`,
+    `   Bundle ID: ${e.bundle_id}`,
+    e.activated_at ? `   Activated: ${e.activated_at}` : null,
+    e.expiry_date ? `   Expires: ${e.expiry_date}` : null,
+    `   Free Trial: ${e.is_free_trial}`,
+    `   Created: ${e.created_at}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fmtGroupAnalyst(a: GroupAnalyst): string {
+  return [
+    `👤 [${a.id}] Analyst`,
+    `   User ID: ${a.user_id}`,
+    `   Group ID: ${a.group_id}`,
+    `   Created: ${a.created_at}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -699,6 +779,875 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
       handleTool(async () => {
         const data = await client.list<Promotion>("/promotions", page ?? 1, limit ?? 25);
         return formatPaginated("Promotions", data, fmtPromotion);
+      }),
+  );
+
+  // ── Users (missing: update, delete) ───────────────────────────────
+
+  server.tool(
+    "update_user",
+    "Update an existing user's details.",
+    {
+      user_id: z.number().int().positive().describe("The user ID to update"),
+      first_name: z.string().optional().describe("New first name"),
+      last_name: z.string().optional().describe("New last name"),
+      email: z.string().email().optional().describe("New email address"),
+      company: z.string().optional().describe("Company name"),
+      roles: z.array(z.string()).optional().describe("Roles array"),
+      custom_profile_field_definitions: z
+        .array(z.object({ id: z.number(), value: z.string() }))
+        .optional()
+        .describe("Custom profile field values"),
+    },
+    async ({ user_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.first_name !== undefined) payload.first_name = fields.first_name;
+        if (fields.last_name !== undefined) payload.last_name = fields.last_name;
+        if (fields.email !== undefined) payload.email = fields.email;
+        if (fields.company !== undefined) payload.company = fields.company;
+        if (fields.roles !== undefined) payload.roles = fields.roles;
+        if (fields.custom_profile_field_definitions !== undefined)
+          payload.custom_profile_field_definitions = fields.custom_profile_field_definitions;
+
+        const user = await client.put<User>(`/users/${user_id}`, payload);
+        return formatSingle("User Updated", user, fmtUser);
+      }),
+  );
+
+  server.tool(
+    "delete_user",
+    "Delete a user from the Thinkific site.",
+    {
+      user_id: z.number().int().positive().describe("The user ID to delete"),
+    },
+    async ({ user_id }) =>
+      handleTool(async () => {
+        await client.delete(`/users/${user_id}`);
+        return `User ${user_id} deleted successfully.`;
+      }),
+  );
+
+  // ── Enrollments (missing: get, update) ────────────────────────────
+
+  server.tool(
+    "get_enrollment",
+    "Get detailed information about a specific enrollment by ID.",
+    {
+      id: z.number().int().positive().describe("The enrollment ID"),
+    },
+    async ({ id }) =>
+      handleTool(async () => {
+        const enrollment = await client.get<Enrollment>(`/enrollments/${id}`);
+        return formatSingle("Enrollment Details", enrollment, fmtEnrollment);
+      }),
+  );
+
+  server.tool(
+    "update_enrollment",
+    "Update an enrollment (e.g. change expiry date, mark completed, set free trial).",
+    {
+      id: z.number().int().positive().describe("The enrollment ID to update"),
+      activated_at: z.string().optional().describe("Activation date (ISO 8601)"),
+      expiry_date: z.string().optional().describe("Expiry date (ISO 8601)"),
+      is_free_trial: z.boolean().optional().describe("Whether this is a free trial enrollment"),
+      completed: z.boolean().optional().describe("Mark the enrollment as completed"),
+    },
+    async ({ id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.activated_at !== undefined) payload.activated_at = fields.activated_at;
+        if (fields.expiry_date !== undefined) payload.expiry_date = fields.expiry_date;
+        if (fields.is_free_trial !== undefined) payload.is_free_trial = fields.is_free_trial;
+        if (fields.completed !== undefined) payload.completed = fields.completed;
+
+        const enrollment = await client.put<Enrollment>(`/enrollments/${id}`, payload);
+        return formatSingle("Enrollment Updated", enrollment, fmtEnrollment);
+      }),
+  );
+
+  // ── Bundles (missing: get, courses, enrollments) ───────────────────
+
+  server.tool(
+    "get_bundle",
+    "Get detailed information about a specific bundle by ID.",
+    {
+      bundle_id: z.number().int().positive().describe("The bundle ID"),
+    },
+    async ({ bundle_id }) =>
+      handleTool(async () => {
+        const bundle = await client.get<Bundle>(`/bundles/${bundle_id}`);
+        return formatSingle("Bundle Details", bundle, fmtBundle);
+      }),
+  );
+
+  server.tool(
+    "list_bundle_courses",
+    "List courses within a specific bundle.",
+    {
+      bundle_id: z.number().int().positive().describe("The bundle ID"),
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ bundle_id, page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<Course>(`/bundles/${bundle_id}/courses`, page ?? 1, limit ?? 25);
+        return formatPaginated(`Courses in Bundle ${bundle_id}`, data, fmtCourse);
+      }),
+  );
+
+  server.tool(
+    "list_bundle_enrollments",
+    "List enrollments for a specific bundle.",
+    {
+      bundle_id: z.number().int().positive().describe("The bundle ID"),
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ bundle_id, page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<BundleEnrollment>(`/bundles/${bundle_id}/enrollments`, page ?? 1, limit ?? 25);
+        return formatPaginated(`Enrollments for Bundle ${bundle_id}`, data, fmtBundleEnrollment);
+      }),
+  );
+
+  server.tool(
+    "create_bundle_enrollment",
+    "Enroll a user in a bundle.",
+    {
+      bundle_id: z.number().int().positive().describe("The bundle ID"),
+      user_id: z.number().int().positive().describe("The user ID to enroll"),
+      activated_at: z.string().optional().describe("Activation date (ISO 8601)"),
+      expiry_date: z.string().optional().describe("Expiry date (ISO 8601)"),
+    },
+    async ({ bundle_id, user_id, activated_at, expiry_date }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = { user_id };
+        if (activated_at) payload.activated_at = activated_at;
+        if (expiry_date) payload.expiry_date = expiry_date;
+
+        const enrollment = await client.post<BundleEnrollment>(`/bundles/${bundle_id}/enrollments`, payload);
+        return formatSingle("Bundle Enrollment Created", enrollment, fmtBundleEnrollment);
+      }),
+  );
+
+  server.tool(
+    "update_bundle_enrollment",
+    "Update a bundle enrollment (e.g. change expiry, free trial status).",
+    {
+      bundle_id: z.number().int().positive().describe("The bundle ID"),
+      user_id: z.number().int().positive().describe("The user ID"),
+      activated_at: z.string().optional().describe("New activation date (ISO 8601)"),
+      expiry_date: z.string().optional().describe("New expiry date (ISO 8601)"),
+      is_free_trial: z.boolean().optional().describe("Update free trial status"),
+    },
+    async ({ bundle_id, user_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = { user_id };
+        if (fields.activated_at !== undefined) payload.activated_at = fields.activated_at;
+        if (fields.expiry_date !== undefined) payload.expiry_date = fields.expiry_date;
+        if (fields.is_free_trial !== undefined) payload.is_free_trial = fields.is_free_trial;
+
+        const enrollment = await client.put<BundleEnrollment>(`/bundles/${bundle_id}/enrollments`, payload);
+        return formatSingle("Bundle Enrollment Updated", enrollment, fmtBundleEnrollment);
+      }),
+  );
+
+  // ── Categories (missing: create, get, update, delete, products) ────
+
+  server.tool(
+    "create_category",
+    "Create a new category (collection) for organizing products.",
+    {
+      name: z.string().min(1).describe("Category name"),
+      description: z.string().optional().describe("Category description"),
+    },
+    async ({ name, description }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = { name };
+        if (description) payload.description = description;
+
+        const category = await client.post<Category>("/collections", payload);
+        return formatSingle("Category Created", category, fmtCategory);
+      }),
+  );
+
+  server.tool(
+    "get_category",
+    "Get detailed information about a specific category by ID.",
+    {
+      category_id: z.number().int().positive().describe("The category ID"),
+    },
+    async ({ category_id }) =>
+      handleTool(async () => {
+        const category = await client.get<Category>(`/collections/${category_id}`);
+        return formatSingle("Category Details", category, fmtCategory);
+      }),
+  );
+
+  server.tool(
+    "update_category",
+    "Update an existing category.",
+    {
+      category_id: z.number().int().positive().describe("The category ID to update"),
+      name: z.string().optional().describe("New category name"),
+      description: z.string().optional().describe("New description"),
+    },
+    async ({ category_id, name, description }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (name !== undefined) payload.name = name;
+        if (description !== undefined) payload.description = description;
+
+        const category = await client.put<Category>(`/collections/${category_id}`, payload);
+        return formatSingle("Category Updated", category, fmtCategory);
+      }),
+  );
+
+  server.tool(
+    "delete_category",
+    "Delete a category from the Thinkific site.",
+    {
+      category_id: z.number().int().positive().describe("The category ID to delete"),
+    },
+    async ({ category_id }) =>
+      handleTool(async () => {
+        await client.delete(`/collections/${category_id}`);
+        return `Category ${category_id} deleted successfully.`;
+      }),
+  );
+
+  server.tool(
+    "list_category_products",
+    "List products in a specific category.",
+    {
+      category_id: z.number().int().positive().describe("The category ID"),
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ category_id, page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<Product>(`/collections/${category_id}/products`, page ?? 1, limit ?? 25);
+        return formatPaginated(`Products in Category ${category_id}`, data, fmtProduct);
+      }),
+  );
+
+  // ── Category Memberships ────────────────────────────────────────────
+
+  server.tool(
+    "add_products_to_category",
+    "Add products to a category (collection membership).",
+    {
+      category_id: z.number().int().positive().describe("The category ID"),
+      product_ids: z.array(z.number().int().positive()).describe("Product IDs to add to this category"),
+    },
+    async ({ category_id, product_ids }) =>
+      handleTool(async () => {
+        await client.post(`/collection_memberships/${category_id}`, { product_ids });
+        return `Added ${product_ids.length} product(s) to category ${category_id}.`;
+      }),
+  );
+
+  server.tool(
+    "remove_products_from_category",
+    "Remove products from a category (collection membership).",
+    {
+      category_id: z.number().int().positive().describe("The category ID"),
+      product_ids: z.array(z.number().int().positive()).describe("Product IDs to remove from this category"),
+    },
+    async ({ category_id, product_ids }) =>
+      handleTool(async () => {
+        await client.request("DELETE", `/collection_memberships/${category_id}`, { product_ids });
+        return `Removed ${product_ids.length} product(s) from category ${category_id}.`;
+      }),
+  );
+
+  // ── Chapters (missing: get) ─────────────────────────────────────────
+
+  server.tool(
+    "get_chapter",
+    "Get detailed information about a specific chapter by ID.",
+    {
+      chapter_id: z.number().int().positive().describe("The chapter ID"),
+    },
+    async ({ chapter_id }) =>
+      handleTool(async () => {
+        const chapter = await client.get<Chapter>(`/chapters/${chapter_id}`);
+        return formatSingle("Chapter Details", chapter, fmtChapter);
+      }),
+  );
+
+  // ── Contents (missing: get) ─────────────────────────────────────────
+
+  server.tool(
+    "get_content",
+    "Get detailed information about a specific content/lesson by ID.",
+    {
+      content_id: z.number().int().positive().describe("The content/lesson ID"),
+    },
+    async ({ content_id }) =>
+      handleTool(async () => {
+        const content = await client.get<Content>(`/contents/${content_id}`);
+        return formatSingle("Content Details", content, fmtContent);
+      }),
+  );
+
+  // ── Coupons (missing: get, update, delete, bulk_create) ─────────────
+
+  server.tool(
+    "get_coupon",
+    "Get detailed information about a specific coupon by ID.",
+    {
+      coupon_id: z.number().int().positive().describe("The coupon ID"),
+    },
+    async ({ coupon_id }) =>
+      handleTool(async () => {
+        const coupon = await client.get<Coupon>(`/coupons/${coupon_id}`);
+        return formatSingle("Coupon Details", coupon, fmtCoupon);
+      }),
+  );
+
+  server.tool(
+    "update_coupon",
+    "Update an existing coupon.",
+    {
+      coupon_id: z.number().int().positive().describe("The coupon ID to update"),
+      code: z.string().optional().describe("New coupon code"),
+      note: z.string().optional().describe("Internal note"),
+      quantity: z.number().int().positive().optional().describe("Maximum uses"),
+      expires_at: z.string().optional().describe("New expiry date (ISO 8601)"),
+    },
+    async ({ coupon_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.code !== undefined) payload.code = fields.code;
+        if (fields.note !== undefined) payload.note = fields.note;
+        if (fields.quantity !== undefined) payload.quantity = fields.quantity;
+        if (fields.expires_at !== undefined) payload.expires_at = fields.expires_at;
+
+        const coupon = await client.put<Coupon>(`/coupons/${coupon_id}`, payload);
+        return formatSingle("Coupon Updated", coupon, fmtCoupon);
+      }),
+  );
+
+  server.tool(
+    "delete_coupon",
+    "Delete a coupon.",
+    {
+      coupon_id: z.number().int().positive().describe("The coupon ID to delete"),
+    },
+    async ({ coupon_id }) =>
+      handleTool(async () => {
+        await client.delete(`/coupons/${coupon_id}`);
+        return `Coupon ${coupon_id} deleted successfully.`;
+      }),
+  );
+
+  server.tool(
+    "bulk_create_coupons",
+    "Bulk-create multiple coupon codes at once under a promotion.",
+    {
+      promotion_id: z.number().int().positive().describe("Promotion ID these coupons belong to"),
+      codes: z.array(z.string()).describe("Array of coupon code strings to create"),
+      quantity: z.number().int().positive().optional().describe("Max uses per coupon (omit for unlimited)"),
+      note: z.string().optional().describe("Note to attach to all coupons"),
+    },
+    async ({ promotion_id, codes, quantity, note }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = { promotion_id, codes };
+        if (quantity !== undefined) payload.quantity = quantity;
+        if (note !== undefined) payload.note = note;
+
+        const result = await client.post<unknown>("/coupons/bulk_create", payload);
+        return `Bulk coupon creation submitted. ${codes.length} codes requested.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  // ── Course Reviews (missing: create, get) ───────────────────────────
+
+  server.tool(
+    "create_course_review",
+    "Create a course review.",
+    {
+      course_id: z.number().int().positive().describe("The course ID"),
+      user_id: z.number().int().positive().describe("The user ID leaving the review"),
+      rating: z.number().int().min(1).max(5).describe("Rating from 1 to 5"),
+      title: z.string().optional().describe("Review title"),
+      review_text: z.string().optional().describe("Review body text"),
+    },
+    async (params) =>
+      handleTool(async () => {
+        const review = await client.post<CourseReview>("/course_reviews", params);
+        return formatSingle("Course Review Created", review, fmtReview);
+      }),
+  );
+
+  server.tool(
+    "get_course_review",
+    "Get a specific course review by ID.",
+    {
+      review_id: z.number().int().positive().describe("The course review ID"),
+    },
+    async ({ review_id }) =>
+      handleTool(async () => {
+        const review = await client.get<CourseReview>(`/course_reviews/${review_id}`);
+        return formatSingle("Course Review", review, fmtReview);
+      }),
+  );
+
+  // ── Custom Profile Fields ────────────────────────────────────────────
+
+  server.tool(
+    "list_custom_profile_fields",
+    "List custom profile field definitions for the site.",
+    {
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<CustomProfileFieldDefinition>(
+          "/custom_profile_field_definitions",
+          page ?? 1,
+          limit ?? 25,
+        );
+        return formatPaginated("Custom Profile Field Definitions", data, fmtCustomProfileFieldDef);
+      }),
+  );
+
+  // ── External Orders ──────────────────────────────────────────────────
+
+  server.tool(
+    "create_external_order",
+    "Create an external order for a user (for purchases made outside Thinkific).",
+    {
+      user_id: z.number().int().positive().describe("The user ID"),
+      product_id: z.number().int().positive().describe("The product ID"),
+      amount_cents: z.number().int().min(0).describe("Amount in cents (e.g. 4999 for $49.99)"),
+      coupon_code: z.string().optional().describe("Coupon code applied"),
+    },
+    async (params) =>
+      handleTool(async () => {
+        const order = await client.post<ExternalOrder>("/external_orders", params);
+        return formatSingle("External Order Created", order, fmtExternalOrder);
+      }),
+  );
+
+  server.tool(
+    "refund_external_order",
+    "Refund an external order.",
+    {
+      order_id: z.number().int().positive().describe("The external order ID to refund"),
+      amount_cents: z.number().int().min(0).optional().describe("Amount to refund in cents (omit for full refund)"),
+    },
+    async ({ order_id, amount_cents }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (amount_cents !== undefined) payload.amount_cents = amount_cents;
+
+        const result = await client.post<unknown>(`/external_orders/${order_id}/transactions/refund`, payload);
+        return `Refund processed for order ${order_id}.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  server.tool(
+    "purchase_external_order",
+    "Record a purchase transaction for an external order.",
+    {
+      order_id: z.number().int().positive().describe("The external order ID"),
+      amount_cents: z.number().int().min(0).describe("Amount in cents"),
+    },
+    async ({ order_id, amount_cents }) =>
+      handleTool(async () => {
+        const result = await client.post<unknown>(`/external_orders/${order_id}/transactions/purchase`, { amount_cents });
+        return `Purchase transaction recorded for order ${order_id}.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  // ── Groups (missing: create, delete) ────────────────────────────────
+
+  server.tool(
+    "create_group",
+    "Create a new group on the Thinkific site.",
+    {
+      name: z.string().min(1).describe("Group name"),
+    },
+    async ({ name }) =>
+      handleTool(async () => {
+        const group = await client.post<Group>("/groups", { name });
+        return formatSingle("Group Created", group, fmtGroup);
+      }),
+  );
+
+  server.tool(
+    "delete_group",
+    "Delete a group from the Thinkific site.",
+    {
+      group_id: z.number().int().positive().describe("The group ID to delete"),
+    },
+    async ({ group_id }) =>
+      handleTool(async () => {
+        await client.delete(`/groups/${group_id}`);
+        return `Group ${group_id} deleted successfully.`;
+      }),
+  );
+
+  // ── Group Analysts ───────────────────────────────────────────────────
+
+  server.tool(
+    "list_group_analysts",
+    "List analysts (managers) for a group.",
+    {
+      group_id: z.number().int().positive().describe("The group ID"),
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ group_id, page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<GroupAnalyst>(`/groups/${group_id}/analysts`, page ?? 1, limit ?? 25);
+        return formatPaginated(`Analysts for Group ${group_id}`, data, fmtGroupAnalyst);
+      }),
+  );
+
+  server.tool(
+    "add_group_analyst",
+    "Add a user as an analyst (manager) for a group.",
+    {
+      group_id: z.number().int().positive().describe("The group ID"),
+      user_id: z.number().int().positive().describe("The user ID to add as analyst"),
+    },
+    async ({ group_id, user_id }) =>
+      handleTool(async () => {
+        const analyst = await client.post<GroupAnalyst>(`/groups/${group_id}/analysts`, { user_id });
+        return formatSingle("Group Analyst Added", analyst, fmtGroupAnalyst);
+      }),
+  );
+
+  server.tool(
+    "remove_group_analyst",
+    "Remove a user as an analyst from a group.",
+    {
+      group_id: z.number().int().positive().describe("The group ID"),
+      user_id: z.number().int().positive().describe("The user ID to remove"),
+    },
+    async ({ group_id, user_id }) =>
+      handleTool(async () => {
+        await client.delete(`/groups/${group_id}/analysts/${user_id}`);
+        return `User ${user_id} removed as analyst from group ${group_id}.`;
+      }),
+  );
+
+  // ── Group Users ──────────────────────────────────────────────────────
+
+  server.tool(
+    "add_user_to_group",
+    "Add a user to a group.",
+    {
+      group_id: z.number().int().positive().describe("The group ID"),
+      user_id: z.number().int().positive().describe("The user ID to add"),
+    },
+    async ({ group_id, user_id }) =>
+      handleTool(async () => {
+        const result = await client.post<GroupUser>("/group_users", { group_id, user_id });
+        return `User ${user_id} added to group ${group_id}.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  // ── Instructors (missing: create, get, update, delete) ───────────────
+
+  server.tool(
+    "create_instructor",
+    "Create a new instructor profile.",
+    {
+      first_name: z.string().min(1).describe("Instructor's first name"),
+      last_name: z.string().min(1).describe("Instructor's last name"),
+      email: z.string().email().optional().describe("Instructor's email"),
+      title: z.string().optional().describe("Job title"),
+      bio: z.string().optional().describe("Instructor bio"),
+      slug: z.string().optional().describe("URL slug"),
+    },
+    async (params) =>
+      handleTool(async () => {
+        const instructor = await client.post<Instructor>("/instructors", params);
+        return formatSingle("Instructor Created", instructor, fmtInstructor);
+      }),
+  );
+
+  server.tool(
+    "get_instructor",
+    "Get detailed information about a specific instructor by ID.",
+    {
+      instructor_id: z.number().int().positive().describe("The instructor ID"),
+    },
+    async ({ instructor_id }) =>
+      handleTool(async () => {
+        const instructor = await client.get<Instructor>(`/instructors/${instructor_id}`);
+        return formatSingle("Instructor Details", instructor, fmtInstructor);
+      }),
+  );
+
+  server.tool(
+    "update_instructor",
+    "Update an instructor's profile.",
+    {
+      instructor_id: z.number().int().positive().describe("The instructor ID to update"),
+      first_name: z.string().optional().describe("New first name"),
+      last_name: z.string().optional().describe("New last name"),
+      email: z.string().email().optional().describe("New email"),
+      title: z.string().optional().describe("New title"),
+      bio: z.string().optional().describe("New bio"),
+      slug: z.string().optional().describe("New slug"),
+    },
+    async ({ instructor_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.first_name !== undefined) payload.first_name = fields.first_name;
+        if (fields.last_name !== undefined) payload.last_name = fields.last_name;
+        if (fields.email !== undefined) payload.email = fields.email;
+        if (fields.title !== undefined) payload.title = fields.title;
+        if (fields.bio !== undefined) payload.bio = fields.bio;
+        if (fields.slug !== undefined) payload.slug = fields.slug;
+
+        const instructor = await client.put<Instructor>(`/instructors/${instructor_id}`, payload);
+        return formatSingle("Instructor Updated", instructor, fmtInstructor);
+      }),
+  );
+
+  server.tool(
+    "delete_instructor",
+    "Delete an instructor profile.",
+    {
+      instructor_id: z.number().int().positive().describe("The instructor ID to delete"),
+    },
+    async ({ instructor_id }) =>
+      handleTool(async () => {
+        await client.delete(`/instructors/${instructor_id}`);
+        return `Instructor ${instructor_id} deleted successfully.`;
+      }),
+  );
+
+  // ── Product Publish Requests ─────────────────────────────────────────
+
+  server.tool(
+    "list_publish_requests",
+    "List product publish requests.",
+    {
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<ProductPublishRequest>("/product_publish_requests", page ?? 1, limit ?? 25);
+        return formatPaginated("Product Publish Requests", data, fmtProductPublishRequest);
+      }),
+  );
+
+  server.tool(
+    "get_publish_request",
+    "Get a specific product publish request by ID.",
+    {
+      request_id: z.number().int().positive().describe("The publish request ID"),
+    },
+    async ({ request_id }) =>
+      handleTool(async () => {
+        const req = await client.get<ProductPublishRequest>(`/product_publish_requests/${request_id}`);
+        return formatSingle("Publish Request Details", req, fmtProductPublishRequest);
+      }),
+  );
+
+  server.tool(
+    "approve_publish_request",
+    "Approve a product publish request.",
+    {
+      request_id: z.number().int().positive().describe("The publish request ID to approve"),
+    },
+    async ({ request_id }) =>
+      handleTool(async () => {
+        const result = await client.post<unknown>(`/product_publish_requests/${request_id}/approve`, {});
+        return `Publish request ${request_id} approved.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  server.tool(
+    "deny_publish_request",
+    "Deny a product publish request.",
+    {
+      request_id: z.number().int().positive().describe("The publish request ID to deny"),
+      reason: z.string().optional().describe("Reason for denial"),
+    },
+    async ({ request_id, reason }) =>
+      handleTool(async () => {
+        const payload = reason ? { reason } : {};
+        const result = await client.post<unknown>(`/product_publish_requests/${request_id}/deny`, payload);
+        return `Publish request ${request_id} denied.\n\n${JSON.stringify(result, null, 2)}`;
+      }),
+  );
+
+  // ── Products (missing: related) ──────────────────────────────────────
+
+  server.tool(
+    "list_related_products",
+    "List related products for a given product.",
+    {
+      product_id: z.number().int().positive().describe("The product ID"),
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ product_id, page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<Product>(`/products/${product_id}/related`, page ?? 1, limit ?? 25);
+        return formatPaginated(`Related Products for Product ${product_id}`, data, fmtProduct);
+      }),
+  );
+
+  // ── Promotions (missing: get, update, delete, by_coupon) ─────────────
+
+  server.tool(
+    "get_promotion",
+    "Get detailed information about a specific promotion by ID.",
+    {
+      promotion_id: z.number().int().positive().describe("The promotion ID"),
+    },
+    async ({ promotion_id }) =>
+      handleTool(async () => {
+        const promo = await client.get<Promotion>(`/promotions/${promotion_id}`);
+        return formatSingle("Promotion Details", promo, fmtPromotion);
+      }),
+  );
+
+  server.tool(
+    "update_promotion",
+    "Update an existing promotion.",
+    {
+      promotion_id: z.number().int().positive().describe("The promotion ID to update"),
+      name: z.string().optional().describe("New name"),
+      description: z.string().optional().describe("New description"),
+      discount_type: z.enum(["percentage", "fixed"]).optional().describe("Discount type"),
+      amount: z.number().positive().optional().describe("New discount amount"),
+      starts_at: z.string().optional().describe("New start date (ISO 8601)"),
+      expires_at: z.string().optional().describe("New expiry date (ISO 8601)"),
+      product_ids: z.array(z.number().int().positive()).optional().describe("Product IDs"),
+    },
+    async ({ promotion_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.name !== undefined) payload.name = fields.name;
+        if (fields.description !== undefined) payload.description = fields.description;
+        if (fields.discount_type !== undefined) payload.discount_type = fields.discount_type;
+        if (fields.amount !== undefined) payload.amount = fields.amount;
+        if (fields.starts_at !== undefined) payload.starts_at = fields.starts_at;
+        if (fields.expires_at !== undefined) payload.expires_at = fields.expires_at;
+        if (fields.product_ids !== undefined) payload.product_ids = fields.product_ids;
+
+        const promo = await client.put<Promotion>(`/promotions/${promotion_id}`, payload);
+        return formatSingle("Promotion Updated", promo, fmtPromotion);
+      }),
+  );
+
+  server.tool(
+    "delete_promotion",
+    "Delete a promotion.",
+    {
+      promotion_id: z.number().int().positive().describe("The promotion ID to delete"),
+    },
+    async ({ promotion_id }) =>
+      handleTool(async () => {
+        await client.delete(`/promotions/${promotion_id}`);
+        return `Promotion ${promotion_id} deleted successfully.`;
+      }),
+  );
+
+  server.tool(
+    "get_promotion_by_coupon",
+    "Look up a promotion by coupon code.",
+    {
+      coupon_code: z.string().min(1).describe("The coupon code to look up"),
+    },
+    async ({ coupon_code }) =>
+      handleTool(async () => {
+        const promo = await client.get<Promotion>("/promotions/by_coupon", { coupon_code });
+        return formatSingle("Promotion by Coupon", promo, fmtPromotion);
+      }),
+  );
+
+  // ── Site Scripts ─────────────────────────────────────────────────────
+
+  server.tool(
+    "list_site_scripts",
+    "List all site scripts on the Thinkific site.",
+    {
+      page: z.number().int().positive().optional().describe("Page number. Default: 1"),
+      limit: z.number().int().min(1).max(250).optional().describe("Items per page. Default: 25"),
+    },
+    async ({ page, limit }) =>
+      handleTool(async () => {
+        const data = await client.list<SiteScript>("/site_scripts", page ?? 1, limit ?? 25);
+        return formatPaginated("Site Scripts", data, fmtSiteScript);
+      }),
+  );
+
+  server.tool(
+    "create_site_script",
+    "Create a new site script (custom JS/CSS snippet).",
+    {
+      name: z.string().min(1).describe("Script name"),
+      content: z.string().min(1).describe("Script content (JavaScript or CSS)"),
+      location: z.enum(["head", "body"]).describe("Where to inject the script: head or body"),
+      enabled: z.boolean().optional().describe("Whether the script is enabled. Default: true"),
+    },
+    async (params) =>
+      handleTool(async () => {
+        const script = await client.post<SiteScript>("/site_scripts", params);
+        return formatSingle("Site Script Created", script, fmtSiteScript);
+      }),
+  );
+
+  server.tool(
+    "get_site_script",
+    "Get a specific site script by ID.",
+    {
+      script_id: z.number().int().positive().describe("The site script ID"),
+    },
+    async ({ script_id }) =>
+      handleTool(async () => {
+        const script = await client.get<SiteScript>(`/site_scripts/${script_id}`);
+        return formatSingle("Site Script Details", script, fmtSiteScript);
+      }),
+  );
+
+  server.tool(
+    "update_site_script",
+    "Update an existing site script.",
+    {
+      script_id: z.number().int().positive().describe("The site script ID to update"),
+      name: z.string().optional().describe("New name"),
+      content: z.string().optional().describe("New script content"),
+      location: z.enum(["head", "body"]).optional().describe("New injection location"),
+      enabled: z.boolean().optional().describe("Enable or disable the script"),
+    },
+    async ({ script_id, ...fields }) =>
+      handleTool(async () => {
+        const payload: Record<string, unknown> = {};
+        if (fields.name !== undefined) payload.name = fields.name;
+        if (fields.content !== undefined) payload.content = fields.content;
+        if (fields.location !== undefined) payload.location = fields.location;
+        if (fields.enabled !== undefined) payload.enabled = fields.enabled;
+
+        const script = await client.put<SiteScript>(`/site_scripts/${script_id}`, payload);
+        return formatSingle("Site Script Updated", script, fmtSiteScript);
+      }),
+  );
+
+  server.tool(
+    "delete_site_script",
+    "Delete a site script.",
+    {
+      script_id: z.number().int().positive().describe("The site script ID to delete"),
+    },
+    async ({ script_id }) =>
+      handleTool(async () => {
+        await client.delete(`/site_scripts/${script_id}`);
+        return `Site script ${script_id} deleted successfully.`;
       }),
   );
 

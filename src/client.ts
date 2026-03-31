@@ -210,6 +210,11 @@ export class ThinkificClient {
     return this.request<T>("PUT", path, body);
   }
 
+  /** HTTP DELETE (no body). */
+  async delete<T>(path: string): Promise<T> {
+    return this.request<T>("DELETE", path);
+  }
+
   // ── Paginated list helper ────────────────────────────────────────────
 
   /**

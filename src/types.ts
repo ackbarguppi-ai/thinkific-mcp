@@ -311,6 +311,102 @@ export interface Promotion {
 }
 
 // ---------------------------------------------------------------------------
+// Custom Profile Field Definitions
+// ---------------------------------------------------------------------------
+
+export interface CustomProfileFieldDefinition {
+  id: number;
+  label: string;
+  field_type: string;
+  required: boolean;
+  position: number;
+  choices: string[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// External Orders
+// ---------------------------------------------------------------------------
+
+export interface ExternalOrder {
+  id: number;
+  user_id: number;
+  user_email: string;
+  product_id: number;
+  product_name: string;
+  amount_cents: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Group Users
+// ---------------------------------------------------------------------------
+
+export interface GroupUser {
+  id: number;
+  group_id: number;
+  user_id: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Group Analysts
+// ---------------------------------------------------------------------------
+
+export interface GroupAnalyst {
+  id: number;
+  user_id: number;
+  group_id: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Product Publish Requests
+// ---------------------------------------------------------------------------
+
+export interface ProductPublishRequest {
+  id: number;
+  product_id: number;
+  product_name: string;
+  status: string;
+  requester_id: number;
+  reviewer_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Site Scripts
+// ---------------------------------------------------------------------------
+
+export interface SiteScript {
+  id: number;
+  name: string;
+  content: string;
+  location: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Bundle Enrollment
+// ---------------------------------------------------------------------------
+
+export interface BundleEnrollment {
+  id: number;
+  bundle_id: number;
+  user_id: number;
+  user_email: string;
+  activated_at: string | null;
+  expiry_date: string | null;
+  is_free_trial: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Auth config
 // ---------------------------------------------------------------------------
 
