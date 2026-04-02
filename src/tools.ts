@@ -379,10 +379,9 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
     async ({ course_id, page, limit }) =>
       handleTool(async () => {
         const data = await client.list<Chapter>(
-          "/chapters",
+          `/courses/${course_id}/chapters`,
           page ?? 1,
           limit ?? 25,
-          { "query[course_id]": course_id },
         );
         return formatPaginated(`Chapters for Course ${course_id}`, data, fmtChapter);
       }),
@@ -401,10 +400,9 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
     async ({ chapter_id, page, limit }) =>
       handleTool(async () => {
         const data = await client.list<Content>(
-          "/contents",
+          `/chapters/${chapter_id}/contents`,
           page ?? 1,
           limit ?? 25,
-          { "query[chapter_id]": chapter_id },
         );
         return formatPaginated(`Contents for Chapter ${chapter_id}`, data, fmtContent);
       }),
@@ -626,7 +624,7 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
     },
     async ({ page, limit }) =>
       handleTool(async () => {
-        const data = await client.list<Category>("/categories", page ?? 1, limit ?? 25);
+        const data = await client.list<Category>("/collections", page ?? 1, limit ?? 25);
         return formatPaginated("Categories", data, fmtCategory);
       }),
   );
