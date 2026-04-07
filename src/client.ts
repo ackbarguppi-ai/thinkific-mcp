@@ -395,6 +395,12 @@ export class ThinkificClient {
               resolve(undefined as unknown as T);
               return;
             }
+
+            // Some endpoints (e.g. PUT /enrollments/{id}) return 200 with an empty body
+            if (decompressed.length === 0) {
+              resolve(undefined as unknown as T);
+              return;
+            }
             
             const data = JSON.parse(decompressed.toString()) as T;
             resolve(data);

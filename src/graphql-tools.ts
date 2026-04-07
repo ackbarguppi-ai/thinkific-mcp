@@ -15,6 +15,13 @@ import { ThinkificClient } from "./client.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Schema that accepts a string or number ID and coerces it to a string.
+ * mcporter sometimes passes numeric-looking values as numbers even when the
+ * tool declares the parameter as z.string().
+ */
+const gqlId = z.union([z.string(), z.number()]).transform((v) => String(v));
+
 async function handleTool(fn: () => Promise<string>): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
     const text = await fn();
@@ -165,7 +172,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_community",
     "Find a community by ID (GraphQL).",
     {
-      id: z.string().describe("The community ID"),
+      id: gqlId.describe("The community ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -179,9 +186,9 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_community_user",
     "Find a community user by ID (GraphQL). Optionally filter by communityId or userId.",
     {
-      id: z.string().optional().describe("The community user ID"),
-      communityId: z.string().optional().describe("Filter by community ID"),
-      userId: z.string().optional().describe("Filter by user ID"),
+      id: gqlId.optional().describe("The community user ID"),
+      communityId: gqlId.optional().describe("Filter by community ID"),
+      userId: gqlId.optional().describe("Filter by user ID"),
     },
     async ({ id, communityId, userId }) =>
       handleTool(async () => {
@@ -195,7 +202,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_post",
     "Find a post or reply by ID (GraphQL).",
     {
-      id: z.string().describe("The post ID"),
+      id: gqlId.describe("The post ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -209,7 +216,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_space",
     "Find a space by ID (GraphQL).",
     {
-      id: z.string().describe("The space ID"),
+      id: gqlId.describe("The space ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -223,7 +230,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_bundle",
     "Returns a Bundle by ID (GraphQL).",
     {
-      id: z.string().describe("The bundle ID"),
+      id: gqlId.describe("The bundle ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -237,7 +244,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_category",
     "Returns a Category by ID (GraphQL).",
     {
-      id: z.string().describe("The category ID"),
+      id: gqlId.describe("The category ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -251,7 +258,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_chapter",
     "Returns a Chapter by ID (GraphQL).",
     {
-      id: z.string().describe("The chapter ID"),
+      id: gqlId.describe("The chapter ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -265,7 +272,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_course",
     "Returns a Course by ID (GraphQL).",
     {
-      id: z.string().describe("The course ID"),
+      id: gqlId.describe("The course ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -293,7 +300,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_group",
     "Returns a Group by ID (GraphQL).",
     {
-      id: z.string().describe("The group ID"),
+      id: gqlId.describe("The group ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -307,7 +314,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_lesson",
     "Returns a Lesson by ID (GraphQL).",
     {
-      id: z.string().describe("The lesson ID"),
+      id: gqlId.describe("The lesson ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -333,7 +340,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_product",
     "Returns a Product by ID (GraphQL).",
     {
-      id: z.string().describe("The product ID"),
+      id: gqlId.describe("The product ID"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -359,7 +366,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_user",
     "Returns a User by their global ID (gid) (GraphQL).",
     {
-      id: z.string().describe("The user's global ID (gid)"),
+      id: gqlId.describe("The user's global ID (gid)"),
     },
     async ({ id }) =>
       handleTool(async () => {
@@ -389,7 +396,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_create_post",
     "Create a community post in a space (GraphQL). Note: CreatePostInput uses 'content' for the body.",
     {
-      spaceId: z.string().describe("The space ID to post in"),
+      spaceId: gqlId.describe("The space ID to post in"),
       title: z.string().describe("Post title"),
       body: z.string().optional().describe("Post body/content"),
     },
@@ -412,7 +419,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_follow_post",
     "Follow a post to receive notifications (GraphQL).",
     {
-      postId: z.string().describe("The post ID to follow"),
+      postId: gqlId.describe("The post ID to follow"),
     },
     async ({ postId }) =>
       handleTool(async () => {
@@ -431,8 +438,8 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_move_post",
     "Move a post to a different space (GraphQL).",
     {
-      postId: z.string().describe("The post ID to move"),
-      spaceId: z.string().describe("The destination space ID"),
+      postId: gqlId.describe("The post ID to move"),
+      spaceId: gqlId.describe("The destination space ID"),
     },
     async ({ postId, spaceId }) =>
       handleTool(async () => {
@@ -451,7 +458,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_pin_post",
     "Pin a post in its space (GraphQL).",
     {
-      postId: z.string().describe("The post ID to pin"),
+      postId: gqlId.describe("The post ID to pin"),
     },
     async ({ postId }) =>
       handleTool(async () => {
@@ -470,7 +477,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_react_to_post",
     "React to a post with an emoji reaction (GraphQL). Valid reactions: EYES, HEART_EYES, JOY, LIKE, OPEN_MOUTH, PENSIVE, TADA, WAVE.",
     {
-      postId: z.string().describe("The post ID to react to"),
+      postId: gqlId.describe("The post ID to react to"),
       reaction: z.enum(["EYES", "HEART_EYES", "JOY", "LIKE", "OPEN_MOUTH", "PENSIVE", "TADA", "WAVE"])
         .describe("The reaction type"),
     },
@@ -491,7 +498,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_reply_to_post",
     "Reply to a post (GraphQL). Note: uses 'content' for the body and 'parentId' for the post ID.",
     {
-      postId: z.string().describe("The parent post ID to reply to"),
+      postId: gqlId.describe("The parent post ID to reply to"),
       body: z.string().describe("Reply body/content"),
     },
     async ({ postId, body }) =>
@@ -511,7 +518,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_unfollow_post",
     "Unfollow a post (GraphQL).",
     {
-      postId: z.string().describe("The post ID to unfollow"),
+      postId: gqlId.describe("The post ID to unfollow"),
     },
     async ({ postId }) =>
       handleTool(async () => {
@@ -530,7 +537,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_unpin_post",
     "Unpin a post (GraphQL).",
     {
-      postId: z.string().describe("The post ID to unpin"),
+      postId: gqlId.describe("The post ID to unpin"),
     },
     async ({ postId }) =>
       handleTool(async () => {
@@ -549,7 +556,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_update_post",
     "Update a post's title and/or content (GraphQL).",
     {
-      postId: z.string().describe("The post ID to update"),
+      postId: gqlId.describe("The post ID to update"),
       title: z.string().optional().describe("New title (optional)"),
       body: z.string().optional().describe("New content/body (optional)"),
     },
@@ -573,8 +580,8 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_bulk_add_users_to_groups",
     "Bulk add multiple users to multiple groups (GraphQL).",
     {
-      userIds: z.array(z.string()).describe("Array of user IDs to add"),
-      groupIds: z.array(z.string()).describe("Array of group IDs to add users to"),
+      userIds: z.array(gqlId).describe("Array of user IDs to add"),
+      groupIds: z.array(gqlId).describe("Array of group IDs to add users to"),
     },
     async ({ userIds, groupIds }) =>
       handleTool(async () => {
@@ -593,8 +600,8 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_bulk_remove_users_from_groups",
     "Bulk remove multiple users from multiple groups (GraphQL).",
     {
-      userIds: z.array(z.string()).describe("Array of user IDs to remove"),
-      groupIds: z.array(z.string()).describe("Array of group IDs to remove users from"),
+      userIds: z.array(gqlId).describe("Array of user IDs to remove"),
+      groupIds: z.array(gqlId).describe("Array of group IDs to remove users from"),
     },
     async ({ userIds, groupIds }) =>
       handleTool(async () => {
@@ -613,7 +620,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_mark_lesson_incomplete",
     "Mark a lesson as incomplete for a user (GraphQL).",
     {
-      lessonId: z.string().describe("The lesson ID to mark incomplete"),
+      lessonId: gqlId.describe("The lesson ID to mark incomplete"),
     },
     async ({ lessonId }) =>
       handleTool(async () => {
@@ -632,7 +639,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_update_assignment_submission",
     "Update the status of an assignment submission (GraphQL). Valid statuses: APPROVED, PENDING, REJECTED.",
     {
-      submissionId: z.string().describe("The assignment submission ID"),
+      submissionId: gqlId.describe("The assignment submission ID"),
       status: z.enum(["APPROVED", "PENDING", "REJECTED"]).describe("New status"),
       message: z.string().optional().describe("Optional feedback message"),
     },
@@ -655,7 +662,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_update_product",
     "Update product attributes (GraphQL). Valid statuses: DRAFT, PENDING_APPROVAL, PRESELL, PUBLISHED.",
     {
-      productId: z.string().describe("The product ID to update"),
+      productId: gqlId.describe("The product ID to update"),
       name: z.string().optional().describe("New product name"),
       description: z.string().optional().describe("New description"),
       slug: z.string().optional().describe("New URL slug"),
@@ -689,7 +696,7 @@ export function registerGraphQLTools(server: McpServer, client: ThinkificClient)
     "gql_view_lesson",
     "Record a lesson view for a user (GraphQL).",
     {
-      lessonId: z.string().describe("The lesson ID to record a view for"),
+      lessonId: gqlId.describe("The lesson ID to record a view for"),
     },
     async ({ lessonId }) =>
       handleTool(async () => {

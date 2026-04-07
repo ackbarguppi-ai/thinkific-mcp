@@ -860,7 +860,10 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
         if (fields.is_free_trial !== undefined) payload.is_free_trial = fields.is_free_trial;
         if (fields.completed !== undefined) payload.completed = fields.completed;
 
-        const enrollment = await client.put<Enrollment>(`/enrollments/${id}`, payload);
+        const enrollment = await client.put<Enrollment | undefined>(`/enrollments/${id}`, payload);
+        if (!enrollment) {
+          return `Enrollment ${id} updated successfully.`;
+        }
         return formatSingle("Enrollment Updated", enrollment, fmtEnrollment);
       }),
   );
