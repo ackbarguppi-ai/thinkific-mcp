@@ -4,7 +4,7 @@ A production-quality [Model Context Protocol](https://modelcontextprotocol.io/) 
 
 ## Features
 
-- **108 MCP tools** covering the full Thinkific API surface — 77 REST tools and 31 GraphQL tools
+- **109 MCP tools** covering the full Thinkific API surface — 78 REST tools and 31 GraphQL tools
 - **Full REST coverage** — courses, users, enrollments, orders, products, bundles, coupons, groups, instructors, reviews, promotions, categories, site scripts, external orders, publish requests, and more
 - **GraphQL support** — queries and mutations for communities, posts, lessons, assignments, and advanced data access via `https://api.thinkific.com/stable/graphql`
 - **3 MCP resources** for quick site overview data
@@ -133,6 +133,7 @@ mcporter tools thinkific
 |------|-------------|----------------|
 | `list_contents` | List lessons in a chapter | `chapter_id`, `page`, `limit` |
 | `get_content` | Get content/lesson details by ID | `content_id` |
+| `list_course_lesson_urls` | List all lessons in a course with take URLs | `course_id` |
 
 ### Orders
 

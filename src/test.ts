@@ -104,6 +104,7 @@ async function runTests(): Promise<void> {
     "get_course",
     "list_chapters",
     "list_contents",
+    "list_course_lesson_urls",
     "list_users",
     "get_user",
     "create_user",
@@ -128,7 +129,7 @@ async function runTests(): Promise<void> {
 
   // Access internal tool registry — McpServer stores tools internally
   // We verify by checking that registration didn't throw and count matches
-  assert(expectedTools.length === 24, `Expected 24 tools defined (got ${expectedTools.length})`);
+  assert(expectedTools.length === 25, `Expected 25 tools defined (got ${expectedTools.length})`);
   console.log(`  ℹ️  ${expectedTools.length} tools expected, registration succeeded`);
 
   // ── Test 5: Type exports ─────────────────────────────────────────

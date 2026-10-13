@@ -76,7 +76,7 @@ export interface Content {
   id: number;
   name: string;
   chapter_id: number;
-  content_type: string;
+  contentable_type: string;
   position: number;
   free: boolean;
   description: string | null;

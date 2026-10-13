@@ -108,10 +108,11 @@ function fmtChapter(ch: Chapter): string {
 function fmtContent(c: Content): string {
   return [
     `📄 [${c.id}] ${c.name}`,
-    `   Type: ${c.content_type}`,
+    `   Type: ${c.contentable_type}`,
     `   Chapter ID: ${c.chapter_id}`,
     `   Position: ${c.position}`,
     `   Free: ${c.free}`,
+    c.take_url ? `   Take URL: ${c.take_url}` : null,
     c.description ? `   Description: ${c.description.slice(0, 150)}` : null,
   ]
     .filter(Boolean)
@@ -405,6 +406,30 @@ export function registerTools(server: McpServer, client: ThinkificClient): void 
           limit ?? 25,
         );
         return formatPaginated(`Contents for Chapter ${chapter_id}`, data, fmtContent);
+      }),
+  );
+
+  server.tool(
+    "list_course_lesson_urls",
+    "List every lesson in a course with its take URL, grouped by chapter in curriculum order.",
+    {
+      course_id: z.number().int().positive().describe("The course ID"),
+    },
+    async ({ course_id }) =>
+      handleTool(async () => {
+        const chapters = await client.listAll<Chapter>(`/courses/${course_id}/chapters`);
+        chapters.sort((a, b) => a.position - b.position);
+        const contentsByChapter = await Promise.all(
+          chapters.map((ch) => client.listAll<Content>(`/chapters/${ch.id}/contents`)),
+        );
+        const total = contentsByChapter.reduce((n, items) => n + items.length, 0);
+        const sections = chapters.map((ch, i) => {
+          const lessons = [...contentsByChapter[i]]
+            .sort((a, b) => a.position - b.position)
+            .map((c) => `   - [${c.id}] ${c.name}\n     ${c.take_url ?? "(no take URL)"}`);
+          return [`📖 [${ch.id}] ${ch.name}`, ...lessons].join("\n");
+        });
+        return `Lesson URLs for Course ${course_id} (${chapters.length} chapters, ${total} lessons)\n\n${sections.join("\n\n")}`;
       }),
   );
 
